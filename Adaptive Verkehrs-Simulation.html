@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Adaptive Verkehrs-Simulation</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        canvas {
+            border: 2px solid #e5e7eb;
+            border-radius: 1rem;
+            background-color: #4b5563;
+        }
+        .info-box {
+            background-color: #1f2937;
+            color: #d1d5db;
+            padding: 1.5rem;
+            border-radius: 1rem;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        .info-box h3 {
+            color: #f3f4f6;
+            font-weight: bold;
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+        }
+        .info-box p {
+            font-size: 0.875rem;
+            line-height: 1.5;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white flex items-center justify-center min-h-screen p-4">
+    <div class="max-w-5xl w-full flex flex-col lg:flex-row items-center lg:items-start space-y-8 lg:space-y-0 lg:space-x-12">
+
+        <!-- Informationsbereich -->
+        <div class="w-full lg:w-1/3 info-box">
+            <h3 class="text-2xl font-bold mb-4">Adaptive Verkehrs-Simulation</h3>
+            <p class="mb-4">
+                Diese Simulation zeigt den Unterschied zwischen statischer und adaptiver Ampelsteuerung. Im adaptiven Modus reagieren die Ampeln auf das tatsächliche Verkehrsaufkommen.
+            </p>
+            <div class="space-y-2 mb-6">
+                <div class="flex items-center space-x-2">
+                    <span class="inline-block w-4 h-4 rounded-full bg-green-500"></span>
+                    <span>= freie Fahrt</span>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <span class="inline-block w-4 h-4 rounded-full bg-red-500"></span>
+                    <span>= Stop</span>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <span class="inline-block w-4 h-4 rounded-full bg-yellow-400"></span>
+                    <span>= Achtung, Ampel wechselt</span>
+                </div>
+            </div>
+            <div class="mt-6 space-y-4">
+                <div class="flex flex-col">
+                    <label for="traffic-mode" class="text-sm font-medium mb-1">Simulationsmodus:</label>
+                    <select id="traffic-mode" class="px-4 py-2 bg-gray-700 rounded-lg text-white border border-gray-600">
+                        <option value="static">Statischer Modus (einfach)</option>
+                        <option value="adaptive">Adaptiver Modus (Smart City)</option>
+                    </select>
+                </div>
+                <div class="flex flex-wrap justify-center lg:justify-start gap-4">
+                    <button id="startButton" class="px-6 py-3 bg-green-600 hover:bg-green-700 text-white font-bold rounded-full shadow-lg transition-all duration-300 transform hover:scale-105">
+                        Simulation starten
+                    </button>
+                    <button id="resetButton" class="px-6 py-3 bg-gray-600 hover:bg-gray-700 text-white font-bold rounded-full shadow-lg transition-all duration-300 transform hover:scale-105">
+                        Zurücksetzen
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Simulations-Canvas -->
+        <div class="w-full lg:w-2/3 flex-shrink-0">
+            <canvas id="trafficCanvas" class="w-full"></canvas>
+        </div>
+    </div>
+
+    <script>
+        // Get DOM elements
+        const canvas = document.getElementById('trafficCanvas');
+        const ctx = canvas.getContext('2d');
+        const startButton = document.getElementById('startButton');
+        const resetButton = document.getElementById('resetButton');
+        const trafficModeSelect = document.getElementById('traffic-mode');
+
+        // Simulation state variables
+        let isRunning = false;
+        let animationFrameId;
+        let carGenerationIntervalId;
+        let trafficLightPhaseTimeoutId;
+        let cars = [];
+        let currentGreenPhaseId = 1; // Start with horizontal (phase 1) green
+
+        // Constants for road and traffic light sizes
+        const roadWidth = 80;
+        const intersectionSize = roadWidth * 2;
+        const carWidth = 20;
+        const carHeight = 40;
+        const speed = 1.5;
+        const carGap = 5; // Gap between cars
+
+        // Definition of traffic lights and their state
+        let trafficLights = [
+            { id: 'north', x: 0, y: 0, color: 'red', phase: 0, carsWaiting: 0 },
+            { id: 'south', x: 0, y: 0, color: 'red', phase: 0, carsWaiting: 0 },
+            { id: 'west', x: 0, y: 0, color: 'green', phase: 1, carsWaiting: 0 },
+            { id: 'east', x: 0, y: 0, color: 'green', phase: 1, carsWaiting: 0 }
+        ];
+
+        // Function to adjust canvas size to the container
+        const resizeCanvas = () => {
+            const container = canvas.parentElement;
+            canvas.width = container.offsetWidth;
+            canvas.height = Math.min(container.offsetWidth * 0.7, window.innerHeight - 100);
+
+            // Recalculate traffic light positions
+            trafficLights[0].x = canvas.width / 2;
+            trafficLights[0].y = canvas.height / 2 + roadWidth / 2 + 10;
+            trafficLights[1].x = canvas.width / 2;
+            trafficLights[1].y = canvas.height / 2 - roadWidth / 2 - 10;
+            trafficLights[2].x = canvas.width / 2 + roadWidth / 2 + 10;
+            trafficLights[2].y = canvas.height / 2;
+            trafficLights[3].x = canvas.width / 2 - roadWidth / 2 - 10;
+            trafficLights[3].y = canvas.height / 2;
+
+            if (!isRunning) {
+                 drawInitialState();
+            }
+        };
+
+        window.addEventListener('resize', resizeCanvas);
+
+        function drawInitialState() {
+             drawRoads();
+             drawTrafficLights();
+        }
+
+        function drawRoads() {
+            ctx.fillStyle = '#4b5563'; // Dunkelgrau für die Straße
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Horizontale Straße
+            ctx.fillStyle = '#374151';
+            ctx.fillRect(0, canvas.height / 2 - roadWidth / 2, canvas.width, roadWidth);
+
+            // Vertikale Straße
+            ctx.fillRect(canvas.width / 2 - roadWidth / 2, 0, roadWidth, canvas.height);
+
+            // Haltelinien
+            ctx.strokeStyle = '#c6c6c6';
+            ctx.setLineDash([]); // Keine Striche
+            ctx.lineWidth = 3;
+
+            // Nord-Haltelinie
+            ctx.beginPath();
+            ctx.moveTo(canvas.width / 2 - roadWidth / 2, canvas.height / 2 + roadWidth / 2);
+            ctx.lineTo(canvas.width / 2 + roadWidth / 2, canvas.height / 2 + roadWidth / 2);
+            ctx.stroke();
+
+            // Süd-Haltelinie
+            ctx.beginPath();
+            ctx.moveTo(canvas.width / 2 - roadWidth / 2, canvas.height / 2 - roadWidth / 2);
+            ctx.lineTo(canvas.width / 2 + roadWidth / 2, canvas.height / 2 - roadWidth / 2);
+            ctx.stroke();
+            
+            // West-Haltelinie
+            ctx.beginPath();
+            ctx.moveTo(canvas.width / 2 - roadWidth / 2, canvas.height / 2 - roadWidth / 2);
+            ctx.lineTo(canvas.width / 2 - roadWidth / 2, canvas.height / 2 + roadWidth / 2);
+            ctx.stroke();
+
+            // Ost-Haltelinie
+            ctx.beginPath();
+            ctx.moveTo(canvas.width / 2 + roadWidth / 2, canvas.height / 2 - roadWidth / 2);
+            ctx.lineTo(canvas.width / 2 + roadWidth / 2, canvas.height / 2 + roadWidth / 2);
+            ctx.stroke();
+
+
+            // Fahrbahnmarkierungen
+            ctx.strokeStyle = '#d1d5db';
+            ctx.setLineDash([10, 10]);
+            ctx.lineWidth = 2;
+
+            // Horizontale Markierungen
+            ctx.beginPath();
+            ctx.moveTo(0, canvas.height / 2);
+            ctx.lineTo(canvas.width / 2 - roadWidth / 2, canvas.height / 2);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(canvas.width / 2 + roadWidth / 2, canvas.height / 2);
+            ctx.lineTo(canvas.width, canvas.height / 2);
+            ctx.stroke();
+
+            // Vertikale Markierungen
+            ctx.beginPath();
+            ctx.moveTo(canvas.width / 2, 0);
+            ctx.lineTo(canvas.width / 2, canvas.height / 2 - roadWidth / 2);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(canvas.width / 2, canvas.height / 2 + roadWidth / 2);
+            ctx.lineTo(canvas.width / 2, canvas.height);
+            ctx.stroke();
+        }
+
+        function drawTrafficLights() {
+            trafficLights.forEach(light => {
+                ctx.beginPath();
+                ctx.arc(light.x, light.y, 8, 0, Math.PI * 2);
+                ctx.fillStyle = light.color;
+                ctx.fill();
+                ctx.closePath();
+            });
+        }
+
+        // Function to create a new car
+        function createCar(direction) {
+            let x, y, dx, dy, color;
+            color = `hsl(${Math.random() * 360}, 70%, 60%)`;
+
+            switch (direction) {
+                case 'north':
+                    x = canvas.width / 2 + roadWidth / 4;
+                    y = canvas.height + carHeight;
+                    dx = 0;
+                    dy = -speed;
+                    break;
+                case 'south':
+                    x = canvas.width / 2 - roadWidth / 4;
+                    y = -carHeight;
+                    dx = 0;
+                    dy = speed;
+                    break;
+                case 'west':
+                    x = -carHeight;
+                    y = canvas.height / 2 + roadWidth / 4;
+                    dx = speed;
+                    dy = 0;
+                    break;
+                case 'east':
+                    x = canvas.width + carHeight;
+                    y = canvas.height / 2 - roadWidth / 4;
+                    dx = -speed;
+                    dy = 0;
+                    break;
+            }
+            cars.push({ x, y, dx, dy, direction, color });
+        }
+
+        // Function to draw a car with a more stylized shape
+        function drawCar(car) {
+            ctx.fillStyle = car.color;
+            let carBodyWidth = 20;
+            let carBodyHeight = 35;
+            let carCabinWidth = 15;
+            let carCabinHeight = 15;
+
+            // Draw based on direction
+            if (car.direction === 'north' || car.direction === 'south') {
+                // Vertical car
+                let carX = car.x - carBodyWidth / 2;
+                let carY = car.y - carBodyHeight / 2;
+                let cabinX = car.x - carCabinWidth / 2;
+                let cabinY = car.y - carCabinHeight / 2;
+                
+                ctx.fillRect(carX, carY, carBodyWidth, carBodyHeight);
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+                ctx.fillRect(cabinX, cabinY, carCabinWidth, carCabinHeight);
+
+            } else {
+                // Horizontal car
+                let carX = car.x - carBodyHeight / 2;
+                let carY = car.y - carBodyWidth / 2;
+                let cabinX = car.x - carCabinHeight / 2;
+                let cabinY = car.y - carCabinWidth / 2;
+
+                ctx.fillRect(carX, carY, carBodyHeight, carBodyWidth);
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+                ctx.fillRect(cabinX, cabinY, carCabinHeight, carCabinWidth);
+            }
+        }
+
+        // Function to update cars (movement and collision)
+        function updateCars() {
+            // Reset waiting car count for adaptive mode
+            trafficLights.forEach(light => light.carsWaiting = 0);
+            
+            // Update each car
+            cars.forEach(car => {
+                let stop = false;
+                let light = trafficLights.find(l => l.id === car.direction);
+                
+                // Define the stop line for each direction
+                let stopLine;
+                if (car.direction === 'north') stopLine = canvas.height / 2 + roadWidth / 2;
+                if (car.direction === 'south') stopLine = canvas.height / 2 - roadWidth / 2;
+                if (car.direction === 'west') stopLine = canvas.width / 2 - roadWidth / 2;
+                if (car.direction === 'east') stopLine = canvas.width / 2 + roadWidth / 2;
+                
+                // Stop at red or yellow light
+                if (light && (light.color === 'red' || light.color === 'yellow')) {
+                    if (car.direction === 'north' && car.y - carHeight / 2 <= stopLine && car.y > stopLine) stop = true;
+                    if (car.direction === 'south' && car.y + carHeight / 2 >= stopLine && car.y < stopLine) stop = true;
+                    if (car.direction === 'west' && car.x + carHeight / 2 >= stopLine && car.x < stopLine) stop = true;
+                    if (car.direction === 'east' && car.x - carHeight / 2 <= stopLine && car.x > stopLine) stop = true;
+                }
+
+                // Check for car in front
+                let carInFront = cars.find(otherCar => {
+                    if (car === otherCar || car.direction !== otherCar.direction) return false;
+
+                    let carFront, otherCarRear;
+                    if (car.direction === 'north') {
+                        carFront = car.y - carHeight / 2;
+                        otherCarRear = otherCar.y + carHeight / 2;
+                        return (otherCarRear - carFront >= 0) && (otherCarRear - carFront < carGap + speed + carHeight / 2);
+                    }
+                    if (car.direction === 'south') {
+                        carFront = car.y + carHeight / 2;
+                        otherCarRear = otherCar.y - carHeight / 2;
+                        return (carFront - otherCarRear >= 0) && (carFront - otherCarRear < carGap + speed + carHeight / 2);
+                    }
+                    if (car.direction === 'west') {
+                        carFront = car.x + carHeight / 2;
+                        otherCarRear = otherCar.x - carHeight / 2;
+                        return (carFront - otherCarRear >= 0) && (carFront - otherCarRear < carGap + speed + carHeight / 2);
+                    }
+                    if (car.direction === 'east') {
+                        carFront = car.x - carHeight / 2;
+                        otherCarRear = otherCar.x + carHeight / 2;
+                        return (otherCarRear - carFront >= 0) && (otherCarRear - carFront < carGap + speed + carHeight / 2);
+                    }
+                    return false;
+                });
+                
+                if (carInFront) stop = true;
+
+                // Update position and count waiting cars
+                if (stop) {
+                    car.dx = 0;
+                    car.dy = 0;
+                    if (light && light.color === 'red') light.carsWaiting++;
+                } else {
+                    if (car.direction === 'north' || car.direction === 'south') {
+                         car.dx = 0;
+                         car.dy = car.direction === 'north' ? -speed : speed;
+                    } else {
+                         car.dx = car.direction === 'west' ? speed : -speed;
+                         car.dy = 0;
+                    }
+                }
+                
+                car.x += car.dx;
+                car.y += car.dy;
+            });
+
+            // Filter out cars that have left the screen
+            cars = cars.filter(car => {
+                return car.x > -carHeight && car.x < canvas.width + carHeight && car.y > -carHeight && car.y < canvas.height + carHeight;
+            });
+        }
+        
+        // Traffic light control - A simple state machine
+        const yellowPhaseDuration = 2000; // 2 seconds
+        const staticGreenDuration = 5000; // 5 seconds
+        const baseAdaptiveDuration = 3000;
+        const carMultiplier = 500; // 500ms extra per waiting car
+
+        const switchPhase = () => {
+             if (!isRunning) return;
+
+             let currentGreenPhase = trafficLights.find(light => light.color === 'green');
+             let currentPhaseId = currentGreenPhase ? currentGreenPhase.phase : null;
+
+             if (currentGreenPhase) {
+                 // Switch from green to yellow
+                 trafficLights.forEach(light => {
+                     if (light.phase === currentPhaseId) {
+                         light.color = 'yellow';
+                     }
+                 });
+                 // Schedule the switch to red after yellow phase
+                 trafficLightPhaseTimeoutId = setTimeout(() => {
+                     trafficLights.forEach(light => {
+                         if (light.phase === currentPhaseId) {
+                             light.color = 'red';
+                         }
+                     });
+                     // After clearing the current phase, determine the next green phase
+                     determineAndSwitchToNextPhase();
+                 }, yellowPhaseDuration);
+
+             } else {
+                 // No green light is active, so we are in a transition or initialization state.
+                 // Directly determine and switch to the next phase.
+                 determineAndSwitchToNextPhase();
+             }
+        };
+
+        const determineAndSwitchToNextPhase = () => {
+            let nextGreenPhaseId;
+            let duration;
+
+            if (trafficModeSelect.value === 'static') {
+                // Static mode: Toggle between phase 0 and 1
+                currentGreenPhaseId = (currentGreenPhaseId === 0) ? 1 : 0;
+                nextGreenPhaseId = currentGreenPhaseId;
+                duration = staticGreenDuration;
+            } else { // Adaptive mode
+                // Get waiting cars for each phase
+                let carsOnPhase0 = trafficLights.filter(l => l.phase === 0).reduce((sum, l) => sum + l.carsWaiting, 0);
+                let carsOnPhase1 = trafficLights.filter(l => l.phase === 1).reduce((sum, l) => sum + l.carsWaiting, 0);
+
+                // Determine the next green phase based on which phase has more waiting cars
+                let currentGreenPhase = trafficLights.find(l => l.color === 'green');
+                let currentGreenPhaseId = currentGreenPhase ? currentGreenPhase.phase : null;
+                
+                if (carsOnPhase0 > carsOnPhase1) {
+                    nextGreenPhaseId = 0; // Vertical gets priority
+                } else if (carsOnPhase1 > carsOnPhase0) {
+                    nextGreenPhaseId = 1; // Horizontal gets priority
+                } else {
+                    // If equal, keep the current green phase if one exists, otherwise default to phase 0
+                    nextGreenPhaseId = (currentGreenPhaseId !== null) ? currentGreenPhaseId : 0;
+                }
+                
+                // Set the duration based on the number of waiting cars in the chosen phase
+                let carsOnNextGreenPhase = (nextGreenPhaseId === 0) ? carsOnPhase0 : carsOnPhase1;
+                duration = baseAdaptiveDuration + (carsOnNextGreenPhase * carMultiplier);
+                
+                if (duration > 15000) duration = 15000; // Cap max duration
+                if (duration < 3000) duration = 3000; // Minimum duration
+            }
+
+            // Set the lights for the next green phase
+            trafficLights.forEach(light => {
+                if (light.phase === nextGreenPhaseId) {
+                    light.color = 'green';
+                } else {
+                    light.color = 'red';
+                }
+            });
+
+            // Schedule the next phase switch after the green duration
+            trafficLightPhaseTimeoutId = setTimeout(switchPhase, duration);
+        }
+
+        // Main animation loop
+        function animate() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawRoads();
+            updateCars();
+            cars.forEach(car => drawCar(car));
+            drawTrafficLights();
+            animationFrameId = requestAnimationFrame(animate);
+        }
+
+        // Event listener for the start button
+        startButton.addEventListener('click', () => {
+            if (!isRunning) {
+                isRunning = true;
+                startButton.textContent = 'Simulation läuft...';
+                startButton.disabled = true;
+                trafficModeSelect.disabled = true;
+
+                // Start generating new cars
+                carGenerationIntervalId = setInterval(() => {
+                    // Balanced car generation with equal probabilities for all directions
+                    if (Math.random() < 0.25) {
+                        createCar('north');
+                    } else if (Math.random() < 0.5) {
+                        createCar('south');
+                    } else if (Math.random() < 0.75) {
+                        createCar('west');
+                    } else {
+                        createCar('east');
+                    }
+                }, 500);
+
+                // Start the traffic light switching timer
+                switchPhase();
+
+                // Start animation loop
+                animate();
+            }
+        });
+
+        // Event listener for the reset button
+        resetButton.addEventListener('click', () => {
+            isRunning = false;
+            startButton.textContent = 'Simulation starten';
+            startButton.disabled = false;
+            trafficModeSelect.disabled = false;
+
+            // Stop animation and timers
+            if (animationFrameId) {
+                cancelAnimationFrame(animationFrameId);
+            }
+            if (carGenerationIntervalId) {
+                clearInterval(carGenerationIntervalId);
+            }
+            if (trafficLightPhaseTimeoutId) {
+                clearTimeout(trafficLightPhaseTimeoutId);
+            }
+
+            // Reset cars and traffic lights
+            cars = [];
+            trafficLights.forEach(light => {
+                 light.color = (light.id === 'north' || light.id === 'south') ? 'red' : 'gray';
+            });
+            
+            drawInitialState();
+        });
+
+        // Initial setup on page load
+        window.onload = function () {
+            resizeCanvas(); // Adjust and draw canvas size
+            drawInitialState();
+        }
+    </script>
+</body>
+</html>
